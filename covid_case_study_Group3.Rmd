@@ -1,0 +1,984 @@
+---
+title: "COVID-19 Case Study"
+author:
+- Group Member Yuting Sun 
+- Group Member Ruichen Li
+- Group Member Sophia Shi
+date: 'Due 11:59PM, Feb 17'
+output:
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    extra_dependencies: ["dcolumn"]
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4'
+urlcolor: blue
+---
+
+
+```{r Setup, include=FALSE, results='hide', warning=FALSE}
+knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+
+# Package setup
+if(!require("pacman")) install.packages("pacman")
+
+pacman::p_load(tidyverse, dplyr, ggplot2, data.table, lubridate, usmap, car)
+```
+
+# Background
+
+The outbreak of the novel Corona virus disease 2019 (COVID-19) [was declared a public health emergency of international concern by the World Health Organization (WHO) on January 30, 2020](https://www.who.int/dg/speeches/detail/who-director-general-s-statement-on-ihr-emergency-committee-on-novel-coronavirus-(2019-ncov)). Upwards of [755 million cases have been confirmed worldwide, with nearly 6.8 million associated deaths](https://covid19.who.int/) by February 2023. Within the US alone, there have been [over 1.1 million deaths and upwards of 102 million cases reported](https://covid.cdc.gov/covid-data-tracker/#trends_dailytrendscases) by February of 2023. Governments around the world have implemented and suggested a number of policies to lessen the spread of the pandemic, including mask-wearing requirements, travel restrictions, business and school closures, and even stay-at-home orders. The global pandemic has impacted the lives of individuals in countless ways, and though many countries have begun vaccinating individuals, the long-term impact of the virus remains unclear.
+
+The impact of COVID-19 on a given segment of the population appears to vary drastically based on the socioeconomic characteristics of the segment. In particular, differing rates of infection and fatalities have been reported among different [racial groups](https://www.cdc.gov/coronavirus/2019-ncov/covid-data/investigations-discovery/hospitalization-death-by-race-ethnicity.html), [age groups](https://www.cdc.gov/coronavirus/2019-ncov/covid-data/investigations-discovery/hospitalization-death-by-age.html), and [socioeconomic groups](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7221360/). One of the most important metrics for determining the impact of the pandemic is the death rate, which is the proportion of people within the total population that die due to the the disease. 
+
+We assembled this dataset for our research with the goal of investigating the effectiveness of lockdowns in flattening the COVID curve. We are providing a portion of the cleaned dataset for this case study.
+
+There are two main goals for this case study:
+
+1. We aim to show the dynamic evolution of COVID cases and COVID-related deaths at the state level.
+
+2. We aim to identify county-level demographic and policy interventions that are associated with mortality rates in the US. We will construct models to find possible factors related to county-level COVID-19 mortality rates.
+
+3. This is a rather complex project, but with our team's help, we have made your job easier.
+
+4. Please hide all unnecessary lengthy R-output and keep your write-up neat and readable.
+  
+**Remark 1:** The data and the statistics reported here were collected before February of 2021. 
+
+**Remark 2:** A group of RAs spent tremendous amount of time working together to assemble the data. It requires data wrangling skills. 
+
+
+# Data Summary
+
+The data comes from several different sources: 
+
+1. [County-level infection and fatality data](https://github.com/nytimes/covid-19-data) - This dataset gives daily cumulative numbers on infection and fatality for each county. 
+    * [NYC data](https://github.com/nychealth/coronavirus-data)
+2. [County-level socioeconomic data](https://www.ers.usda.gov/data-products/atlas-of-rural-and-small-town-america/download-the-data/) - The following are the four relevant datasets from this site.   
+    i. Income - Poverty level and household income. 
+    ii. Jobs - Employment type, rate, and change.
+    iii. People - Population size, density, education level, race, age, household size, and migration rates.
+    iv. County Classifications - Type of county (rural or urban on a rural-urban continuum scale).
+3. [Intervention Policy Data](https://github.com/JieYingWu/COVID-19_US_County-level_Summaries/blob/master/data/interventions.csv) - This dataset is a manually compiled list of the dates that interventions/lockdown policies were implemented and lifted at the county level. 
+
+# EDA
+
+In this case study, we use the following three nearly cleaned data:
+
+* **covid_county.csv**: County-level socialeconomic information that combines the above-mentioned 4 datasets: Income (Poverty level and household income), Jobs (Employment type, rate, and change), People (Population size, density, education level, race, age, household size, and migration rates), County Classifications
+* **covid_rates.csv**: Daily cumulative numbers on infection and fatality for each county
+* **covid_intervention.csv**: County-level lockdown intervention.
+
+**Among all data, the unique identifier of county is `FIPS`.**
+
+The cleaning procedure is attached in `Appendix 2: Data cleaning` You may go through it if you are interested or would like to make any changes. 
+
+First read in the data.
+
+```{r}
+# county-level socialeconomic information
+county_data <- fread("data/covid_county.csv") 
+# county-level COVID case and death
+covid_rate <- fread("data/covid_rates.csv")
+# county-level lockdown dates 
+#covid_intervention <- fread("data/covid_intervention.csv")
+
+```
+
+## Understand the data
+
+The detailed description of variables is in `Appendix 1: Data description`. Please get familiar with the variables. Summarize the two data briefly.
+
+## COVID case trend
+
+It is crucial to decide the right granularity for visualization and analysis. We will compare daily vs weekly total new cases by state and we will see it is hard to interpret daily report.
+
+i) Plot **new** COVID cases in NY, WA and FL by state and by day. Any irregular pattern? What is the biggest problem of using single day data? (Hint: The number of cases and deaths in `covid_rate` are cumulative by county. To calculate the number of **new** cases by state, first use `group_by(FIPS)`, `arrange(date)`, and `lag(cum_cases, default = 0)` function to get lagged cases, and then calculate daily new cases by subtracting `cum_cases` by the lagged `cum_cases`. Finally, aggregate the daily new cases by `State` and `date` to get the daily new cases by state.)
+
+```{r}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+
+# Read in the data
+covid_rate <- fread("data/covid_rates.csv")
+
+# Convert date column to Date format
+covid_rate[, date := as.Date(date)]
+
+# Get daily new cases by county (FIPS)
+daily <- covid_rate %>%
+  group_by(FIPS) %>%
+  arrange(date) %>%
+  mutate(daily_new_case = cum_cases - lag(cum_cases, default = 0))
+
+# Get daily new cases by state
+daily_state_cases <- daily %>%
+  group_by(State, date) %>%
+  summarise(daily_new_case = sum(daily_new_case, na.rm = TRUE), .groups = "drop")
+
+# Filter for NY, WA, and FL
+states_of_interest <- c("New York", "Washington", "Florida")
+filtered_states <- daily_state_cases %>%
+  filter(State %in% states_of_interest)
+
+# Plot daily new cases by state
+ggplot(filtered_states, aes(x = date, y = daily_new_case, color = State)) +
+  geom_line() +
+  labs(title = "Daily New COVID Cases in NY, WA, and FL",
+       x = "Date",
+       y = "Daily New Cases") +
+  theme_minimal()
+```
+
+The problem with using single-day data is high volatility(spikes and dips in daily pattern), it may caused by the delays in reporting. Washington has a smoother trend compared to NY and FL. Florida shows large one-day jumps. New York also has sharp peaks, especially in early 2020. Florida and New York show higher volatility, suggesting inconsistent or delayed reporting practices.
+
+Biggest issue of using single day data is that there are many noises and too much fluctuation and is hard to interpret a general trend and summarize what is happening. Delays and artificial spikes can mislead decision-making.
+
+ii) Create **weekly new** cases per 100k `weekly_case_per100k` by state. Plot the spaghetti plots of `weekly_case_per100k` by state. Use `TotalPopEst2019` in `county_data` as population. (Hint: similar to i), first calculate the daily new cases by county, and then calculate the weekly new cases by aggregating the daily new cases by `State` and `week`. Then calculate the total population by `State` in `county_data`.)
+
+```{r}
+# Get weekly new cases by state
+weekly_state_cases <- daily %>%
+  group_by(State, week) %>%
+  summarise(weekly_new_cases = sum(daily_new_case, na.rm = TRUE), .groups = "drop")
+
+# Get state population
+pop_state <- covid_rate %>%
+  distinct(FIPS, State, TotalPopEst2019) %>%
+  group_by(State) %>%
+  summarize(population = sum(TotalPopEst2019, na.rm = TRUE))
+
+# Join weekly state cases with population
+weekly_state_cases <- weekly_state_cases %>%
+  left_join(pop_state, by = "State") %>%
+  mutate(weekly_case_per100k = (weekly_new_cases / population) * 100000)
+
+# Plot weekly new cases per 100k by state
+ggplot(weekly_state_cases, aes(x = week, y = weekly_case_per100k, group = State, color = State)) +
+  geom_line() +
+  labs(title = "Weekly New COVID Cases per 100k by State",
+       x = "Week",
+       y = "Weekly Cases per 100k") +
+  theme_minimal()
+```
+
+iii) Summarize the COVID case trend among states based on the plot in ii). What could be the possible reasons to explain the variability? 
+
+The plot shows multiple peaks with an overall increasing trend.Sharp increases are followed by declines, that's might caused by the holiday seasons. The general rise suggests sustained transmission. The differences between states could be due to varying policies, population density, and other factors. The later peaks were likely driven by relaxed mask mandates and reduced public concern about the virus’s threat to life.
+
+iv) (Optional) Use `covid_intervention` to see whether the effectiveness of lock down in flattening the curve.
+
+## COVID death trend (Optional)
+
+i) For each month in 2020, plot the monthly deaths per 100k heatmap by state on US map. Use the same color range across months. (Hints: Set `limits` argument in `scale_fill_gradient()` or use `facet_wrap()`; use `lubridate::month()` and `lubridate::year()` to extract month and year from date; use `tidyr::complete(state, month, fill = list(new_case_per100k = NA))` to complete the missing months with no cases.)
+
+```{r}
+# your code here
+## calculate daily new death
+ 
+## calculate monthly new death by state
+ 
+## calculate state population
+ 
+## join state monthly death with state population
+ 
+## calculate monthly new_death_per100k by state
+ 
+## `usmap()` recognizes `state` instead of `State` so need to rename(state = State)
+
+## there is no cases for some states in the first months so there is no data
+## we complete the missing months with NA
+# covid_monthly %>% complete(state, month, fill = list(new_death_per100k = NA))
+
+## Plot using plot_usmap()
+# plot_usmap(
+#   data = tmp, 
+#   regions = "state", 
+#   values = "new_death_per100k", 
+#   exclude = c("Hawaii", "Alaska"), 
+#   color = "black") + 
+#   scale_fill_continuous(
+#     low = "white", high = "blue", 
+#     name = "Deaths per 100k", label = scales::comma) + 
+#   labs(title = "State Fatality Rate", 
+#        subtitle = "Continental US States") +
+#   theme(legend.position = "right") +
+#   facet_wrap(~ month)
+```
+
+ii) Use `plotly` to animate the monthly maps in i). Does it reveal any systematic way to capture the dynamic changes among states? (Hints: Follow *Appendix 3: Plotly heatmap::* in Module 6 regularization lecture to plot the heatmap using `plotly`. Use `frame` argument in `add_trace()` for animation. `plotly` only recognizes abbreviation of state names. Use `unique(us_map(regions = "states") %>% select(abbr, full))` to get the abbreviation and merge with the data to get state abbreviation.)
+
+
+# COVID factors
+
+We now try to build a good parsimonious model to find possible factors related to death rate on **county** level. Let us not take time series into account for the moment and use the total number as of *Feb 1, 2021*.
+
+i) Create the response variable `total_death_per100k` as the total of number of COVID deaths per 100k by *Feb 1, 2021*. We suggest to take log transformation as `log_death_rate = log(total_death_per100k + 1)`. Merge `log_death_rate` to `county_data` for the following analysis. (Hints: the unique identifier for counties in `county_data` and `covid_rate` is `FIPS`.)
+
+```{r}
+library(dplyr)
+
+# Create a subset for Feb 1, 2021
+covid_county_0201 <- covid_rate %>%
+  filter(date == "2021-02-01") %>%
+  mutate(
+    total_death_per100k = (cum_deaths / TotalPopEst2019) * 100000,  # Compute deaths per 100k
+    log_death_rate = log(total_death_per100k + 1)  # Apply log transformation
+  ) %>%
+  select(FIPS, log_death_rate)
+
+# Merge with county-level demographic data
+covid_county_0201 <- left_join(covid_county_0201, county_data, by = "FIPS")
+```
+
+
+## Simple regression: Effect of age on death rate
+
+i) Start with a simple regression of `log_death_rate` vs. `Age65AndOlderPct2010` and report the `summary` output. Is `Age65AndOlderPct2010` a significant variable at the .05 level? State what effect `Age65AndOlderPct2010` has on `log_death_rate`, if any, according to this model. 
+
+```{r}
+# Run simple linear regression
+model_age <- lm(log_death_rate ~ Age65AndOlderPct2010, data = covid_county_0201)
+
+# Print the summary of the regression
+summary(model_age)
+```
+
+Age65AndOlderPct2010 has a positive but weak effect on log_death_rate, but the relationship is not statistically significant at the 0.05 level.
+
+ii) Add `PovertyAllAgesPct` on top of the variable `Age65AndOlderPct2010` to your linear model. Is `Age65AndOlderPct2010` a significant variable at the .05 level? Give a precise interpretation of the effect of `Age65AndOlderPct2010` on `log_death_rate` in this model. 
+
+```{r}
+#Run multiple linear regression with Age65AndOlderPct2010 and PovertyAllAgesPct
+model_age_poverty <- lm(log_death_rate ~ Age65AndOlderPct2010 + PovertyAllAgesPct, data = covid_county_0201)
+
+# Print the summary of the regression
+summary(model_age_poverty)
+```
+
+Age65AndOlderPct2010 is not a significant variable at the .05 level. As Age65AndOlderPct2010 increase by 1% the log_death_rate increases by 0.01027. 
+
+iii) The estimates and 95% CI's for the coefficient of `Age65AndOlderPct2010` are different among (i) and (ii). How would you explain the difference to a non-statistician?
+
+We added `PovertyAllAgesPct` as an additional predictor. Now, the model separately accounts for the impact of poverty on death rates. If poverty and the percentage of elderly people are related (which they often are), then adding poverty to the model helps to "isolate" the true effect of `Age65AndOlderPct2010` on `log_death_rate`. The estimates and 95% CIs for Age65AndOlderPct2010 changed between lm1 and lm2 because adding PovertyAllAgesPct in model (ii) controlled for an important factor that was previously omitted. In model (i), some of poverty’s effect was mistakenly absorbed into the age coefficient, leading to a weaker estimate and wider CI due to omitted variable bias. Once poverty was included in model (ii), the effect of age became clearer, stronger, and statistically significant. Additionally, the confidence interval narrowed, meaning we now have a more precise estimate of age’s true effect on COVID death rates. This demonstrates the importance of controlling for key confounding variables when interpreting regression results.
+
+iv) (Optional) Create a model with interaction by fitting `lm(log_death_rate ~ PovertyAllAgesPct * Age65AndOlderPct2010)`. Is the interaction effect significant at .05 level? Explain the Age65AndOlderPct2010 effect (if any). 
+
+
+## Categorical variable: Effect of urban on death rate
+
+Remember that the same variable can play different roles! Take a quick look at the variable `UrbanInfluenceCode2013`, and try to use this variable in the following analyses wisely. The Urban Influence Codes divide the 3,143 counties, county equivalents, and independent cities in the United States into 12 groups. The definition of `UrbanInfluenceCode2013` is as follows.
+
+| Code | Description |
+|-----| --------------------------------------------- |
+| 1	|  In large metro area of 1+ million residents	 |
+| 2	|  In small metro area of less than 1 million residents |
+| 3	|  Micropolitan area adjacent to large metro area	 |
+| 4	|  Noncore adjacent to large metro area	 |
+| 5	|  Micropolitan area adjacent to small metro area	 |
+| 6	|  Noncore adjacent to small metro area and contains a town of at least 2,500 residents	 |
+| 7	|  Noncore adjacent to small metro area and does not contain a town of at least 2,500 residents	 |
+| 8	|  Micropolitan area not adjacent to a metro area	 |
+| 9	|  Noncore adjacent to micro area and contains a town of at least 2,500 residents	 |
+| 10	|  Noncore adjacent to micro area and does not contain a town of at least 2,500 residents	 |
+| 11	|  Noncore not adjacent to metro or micro area and contains a town of at least 2,500 residents	 |
+| 12	|  Noncore not adjacent to metro or micro area and does not contain a town of at least 2,500 residents	 |
+
+As you can see, the larger `UrbanInfluenceCode2013` is, the small population the county has. We can interpret `UrbanInfluenceCode2013` as either a continuous (numeric) variable or a categorical variable.
+
+i) How many counties are there for each level of `UrbanInfluenceCode2013`? (Hint: using `table()` or `group_by() + summarise()`)
+
+```{r}
+table(county_data$UrbanInfluenceCode2013)
+```
+
+ii) Fit a model that treats `UrbanInfluenceCode2013` as a continuous/numeric variable. Is `UrbanInfluenceCode2013` significant at the 0.05 level? What effect does `UrbanInfluenceCode2013` have on `log_death_rate` in this model?
+
+```{r}
+# Fit linear model treating UrbanInfluenceCode2013 as continuous
+model_urban_cont <- lm(log_death_rate ~ UrbanInfluenceCode2013, data = covid_county_0201)
+
+# Print summary of the regression
+summary(model_urban_cont)
+```
+
+Treated as a continuous variable, Urban Influence Code does not have a significant effect on log_death_rate (p-value = 0.161 > 0.05). This suggests that the urban alone is not a strong predictor of death. The negative coefficient means that as the Urban Influence Code increases (moving from urban to more rural counties), the log death rate slightly decreases. However, this effect is very small in magnitude.
+
+iii) Fit a model that treats `UrbanInfluenceCode2013` as a categorical/factor. Is `UrbanInfluenceCode2013` significant at the .01 level? What is the effect of `UrbanInfluenceCode2013` in this model? Describe the `UrbanInfluenceCode2013` effect over `log_death_rate`. **(REMEMBER to use Anova() from the `car` package to test a categorical variable as a whole!)**
+
+```{r}
+library(car)
+
+# Fit linear model treating UrbanInfluenceCode2013 as categorical
+model_urban_cat <- lm(log_death_rate ~ factor(UrbanInfluenceCode2013), data = covid_county_0201)
+
+# Perform ANOVA to test the overall significance
+Anova(model_urban_cat, type = "III")  # Type III ANOVA for categorical variable significance
+```
+
+UrbanInfluenceCode2013 is significant at the 0.01 level (p < 2e-16). When treated as a categorical variable, the effect became highly significant, indicating that urban influence categories have distinct effects on death rates.
+
+iv) What are the fundamental differences between treating `UrbanInfluenceCode2013` as a continuous and categorical variable in your models? 
+
+Treating UrbanInfluenceCode2013 as a continuous variable assumes a linear relationship between urban influence and log_death_rate, meaning each unit increase has the same effect. However, the result was not statistically significant (p = 0.161), suggesting this assumption may not hold.
+
+When treated as a categorical variable, each level is analyzed separately, capturing nonlinear patterns. This model was highly significant (p < 2e-16), revealing that some rural areas (e.g., codes 6 and 9) had notably higher death rates. The categorical approach provides more detailed insights into how different levels of urban influence impact death rates.
+
+v) (Optional) Can you test the null hypothesis: fit0: `log_death_rate` is linear in `UrbanInfluenceCode2013` vs. fit1: `log_death_rate` relates to `UrbanInfluenceCode2013` as a categorical variable at .01 level?  
+
+
+## LASSO: Final model
+
+i) Select possible variables in `county_data` as covariates. We provide `county_data_sub`, a subset variables from `county_data`, for you to get started. Please add any potential variables as you wish. 
+
+    a) Report missing values in your final subset of variables. 
+
+    b) In the following anaylsis, you may ignore the missing values.
+
+```{r}
+county_data_sub <- county_data %>%
+  select(FIPS, County, State, Deep_Pov_All, PovertyAllAgesPct, PerCapitaInc, UnempRate2019,
+         PctEmpFIRE, PctEmpConstruction, PctEmpTrans, PctEmpMining, PctEmpTrade, PctEmpInformation, 
+         PctEmpAgriculture, PctEmpManufacturing, PctEmpServices, PopDensity2010, OwnHomePct,
+         Age65AndOlderPct2010, TotalPop25Plus, Under18Pct2010, Ed2HSDiplomaOnlyPct,
+         Ed3SomeCollegePct, Ed4AssocDegreePct, Ed5CollegePlusPct, ForeignBornPct,
+         Net_International_Migration_Rate_2010_2019, NetMigrationRate1019, NaturalChangeRate1019,
+         TotalPopEst2019, WhiteNonHispanicPct2010, NativeAmericanNonHispanicPct2010,
+         BlackNonHispanicPct2010, AsianNonHispanicPct2010, HispanicPct2010, Type_2015_Update,
+         RuralUrbanContinuumCode2013, UrbanInfluenceCode2013, Perpov_1980_0711, HiCreativeClass2000,
+         HiAmenity, Retirement_Destination_2015_Update)
+
+# Check missing values in the selected dataset
+missing_values <- county_data_sub %>%
+  summarise_all(~ sum(is.na(.)))
+
+# Display missing values per column
+missing_values %>%
+  gather(key = "Variable", value = "Missing_Count") %>%
+  arrange(desc(Missing_Count)) %>%
+  filter(Missing_Count > 0)
+
+county_data_sub <- county_data_sub %>% drop_na()
+```
+
+ii) Use LASSO to choose a parsimonious model with all available sensible county-level information. **Force in State** in the process. Why we need to force in `State`? You may use `lambda.1se` to choose a smaller model. **(REMEMBER NEVER include unique identifiers (i.e., `FIPS`, `County`) in your model!)**
+
+```{r}
+library(glmnet)
+# Step 1: Merge log_death_rate from covid_county_0201 into county_data_sub
+county_data_merged <- left_join(county_data_sub, covid_county_0201 %>% select(FIPS, log_death_rate), by = "FIPS")
+
+# Step 2: get X matrix and y
+# Define target variable y
+y <- county_data_merged$log_death_rate
+
+# Define predictor variables X (excluding FIPS, County, and log_death_rate)
+X <- model.matrix(log_death_rate ~ . - FIPS - County, data = county_data_merged)[, -1]  # Remove intercept
+
+# grepl(): use regular expression to locate column with some pattern
+# Step 3: Identify State variables for forcing
+# create indicators: names include State as 0; otherwise 1
+state_ind <- ifelse(grepl("State", colnames(X)), 0, 1) # or we can hard code
+
+# using cv.glmnet() with penalty.factor to force in State variables
+# Step 4: Run LASSO regression with cross-validation
+set.seed(10)
+fit.lasso <- cv.glmnet(X, y, 
+                        alpha = 1, # LASSO penalty
+                        penalty.factor = state_ind, # Force State into model
+                        nfolds = 10) # 10-fold cross-validation
+
+plot(fit.lasso)
+```
+
+```{r}
+# Step 5: Extract the selected coefficients
+coef.1se <- coef(fit.lasso, s = "lambda.1se")  # Get coefficients at lambda.1se
+coef.1se <- coef.1se[which(coef.1se != 0), ]  # Keep only non-zero coefficients
+
+# Step 6: Retrieve the names of the selected variables
+var.1se <- rownames(as.matrix(coef.1se))[-1]  # Extract variable names, excluding intercept
+var.1se
+```
+
+We force in State is because we want always include State. 
+
+iii) Apply backward elimination to the LASSO model from iii) to obtain a final model with all variables significant at 0.05 level. Again **force in State** in the process. **(REMEMBER to use Anova() since we have categorical variables in our model!)**
+
+```{r}
+library(car)  # Anova()
+library(coefplot) # coefficient plot
+
+# Step 1: Fit an OLS model using the LASSO-selected variables
+formula <- as.formula(paste("log_death_rate ~", paste(var.1se, collapse = " + ")))
+
+# Convert State into dummy variables
+state_dummies <- model.matrix(~ State - 1, data = county_data_merged)
+
+# Remove the original State column and bind dummy variables
+county_data_final <- cbind(county_data_merged %>% select(-State), state_dummies)
+
+fit.1se <- lm(formula, data = county_data_final)
+summary(fit.1se)
+
+# Step 2: Perform Backward Elimination
+# Iteratively remove non-significant variables (p > 0.05), but keep State
+stepwise_model <- step(fit.1se, direction = "backward", trace = FALSE)
+
+# Step 3: Ensure `StateXX` variables remain in the model (if dropped, refit including them)
+final_vars <- names(coef(stepwise_model))  # Get variables actually in the model
+state_vars <- grep("State", colnames(county_data_final), value = TRUE)  # All State dummies
+
+# If none of the StateXX variables remain in the selected model, add them back
+if (!any(final_vars %in% state_vars)) {
+    formula_final <- as.formula(paste("log_death_rate ~", paste(c(final_vars, state_vars), collapse = " + ")))
+    final_model <- lm(formula_final, data = county_data_final)
+} else {
+    final_model <- stepwise_model  # Keep model as is
+}
+
+# Step 4: Use Type III ANOVA for Categorical Variables
+Anova(final_model, type = "III")
+# Step 5: Plot Coefficients of the Final Model
+coefplot(final_model, intercept = FALSE, interactive = TRUE)
+```
+
+iv) Perform model diagnoses on your final model to check whether the linear model assumptions are met.
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(car)   # For VIF and ANOVA
+library(lmtest) # For Breusch-Pagan and Durbin-Watson tests
+
+# Step 1: Check Linearity with Residual vs. Fitted Plot
+plot(final_model$fitted.values, resid(final_model),
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h = 0, col = "red")
+
+# Step 2: Check Normality of Residuals
+# Q-Q Plot
+qqPlot(final_model, main = "Q-Q Plot of Residuals")
+
+# Shapiro-Wilk Test for Normality
+shapiro.test(resid(final_model))
+
+# Step 3: Check Homoscedasticity (Constant Variance)
+# Scale-Location Plot
+plot(final_model, which = 3)
+
+# Breusch-Pagan Test for Heteroscedasticity
+bptest(final_model)
+
+# Step 4: Check Independence of Residuals
+# Durbin-Watson Test for Autocorrelation
+dwtest(final_model)
+
+# Step 5: Check Multicollinearity with Variance Inflation Factor (VIF)
+vif_values <- vif(final_model)
+print(vif_values)
+
+# Identify problematic variables (VIF > 5 indicates severe multicollinearity)
+high_vif <- names(vif_values)[vif_values > 5]
+if (length(high_vif) > 0) {
+  print(paste("Variables with high multicollinearity:", paste(high_vif, collapse = ", ")))
+} else {
+  print("No serious multicollinearity detected.")
+}
+```
+
+Based on the plots, final model does not met the linear model assumptions.
+
+v) It has been shown that COVID affects elderly the most. It is also claimed that the COVID death rate among African Americans and Latinos is higher. Does your analysis support these arguments?
+```{r}
+summary(final_model)
+```
+Elderly and Hispanic populations experienced significantly higher COVID death rates, with a 1% increase in the elderly population leading to a 3.4% rise in mortality and a 1% increase in the Hispanic population resulting in a 1.02% rise. The impact on Black populations remains inconclusive as the variable was not retained in the final model.
+
+vi) Based on your final model, summarize your findings. In particular, summarize the state effect controlling for others. Provide intervention recommendations to policy makers to reduce COVID death rate.
+
+1. State effects: Many states have significant coefficients, indicating that the COVID-19 death rate varies by state even when controlling for other factors. Some states (e.g., Vermont, Kentucky, Montana) show highly negative coefficients, suggesting lower death rates, while others have positive effects.
+
+2. Age factor: The coefficient for the percentage of the population aged 65 and older is positive and highly significant (p < 0.001), supporting the argument that COVID-19 affects the elderly more.
+
+3. Economic and socioeconomic factors:
+- Per capita income is not significant, meaning it might not strongly influence death rates.
+- Higher percentages of employment in industries like agriculture, construction, and mining are associated with significantly higher death rates, possibly due to occupational exposure.
+
+4. Policy Recommendations:
+- Target vaccination and healthcare resources toward states/counties with high predicted death rates.
+- Focus on elderly populations and racial groups disproportionately affected.
+- Implement stronger public health messaging and access to medical care in rural and high-risk urban areas.
+- Ensure economic and healthcare support in regions with high poverty and low healthcare access.
+
+vii) What else can we do to improve our model? What other important information we may have missed? 
+
+A few way to improve the model:
+- Transforming Variables: Applying a log or other transformation (e.g., square root) can address non-linearity and heteroscedasticity by stabilizing variance.
+- Adding Polynomial Terms.
+- Using Robust Regression: When variance is non-constant or outliers heavily influence results, methods like White’s robust standard errors or weighted least squares can yield more reliable inferences.
+
+
+# Goal of the Study
+The objective of this study is to identify key socioeconomic and demographic factors that contribute to county-level variations in COVID-19 death rates. By leveraging statistical modeling techniques, we aim to provide data-driven insights for policymakers to mitigate the impact of COVID-19.
+
+# Data
+
+## Source and Description
+The dataset includes county-level COVID-19 mortality rates and various socioeconomic indicators collected from multiple sources:
+- **COVID-19 death rate data** from public health reports.
+- **Demographic and socioeconomic data** from the U.S. Census Bureau.
+- **Economic indicators** such as income, employment, and industry distribution from federal databases.
+
+## Data Assembly
+The datasets were merged based on the **FIPS** county code to align COVID-19 mortality rates with corresponding socioeconomic data. Missing values were addressed by either removing incomplete records or imputing values where necessary.
+
+# Analyses
+This analysis highlights the significant role of age, race, economic conditions, and state policies in determining COVID-19 death rates. Policymakers should focus on targeted interventions such as increasing healthcare access for vulnerable populations, improving support for elderly communities, and addressing disparities in Hispanic communities.
+
+# Methods Used
+1. Exploratory Data Analysis (EDA)
+- Summarized and visualized data (e.g., daily new COVID cases by county and state).
+- Checked missing values and basic statistics.
+
+2. Simple and Multiple Regressions
+- Investigated the effect of single predictors (e.g., Age65AndOlderPct2010).
+- Added additional predictors (e.g., PovertyAllAgesPct) to see how they change the significance of the original variables.
+
+3. Treating Categorical Variables
+- Compared UrbanInfluenceCode2013 as both continuous and categorical.
+- Used ANOVA to determine the overall significance of categorical predictors.
+
+4. LASSO Regression
+- Used cv.glmnet() to select important predictors.
+- Forced in certain variables (e.g., State) by adjusting the penalty factor.
+
+5. Backward Elimination
+- Took the variables from LASSO and performed backward selection in a standard OLS model.
+- Ensured State remained in the model and checked significance via ANOVA.
+
+6. Model Diagnostics
+- Examined residual plots (Residuals vs. Fitted, Q-Q plot, Scale-Location, Leverage) to test linear model assumptions.
+- Identified potential non-linearity, heteroscedasticity, and influential points.
+
+# Findings
+- **Elderly populations are at higher risk.** A **1 percentage point increase** in the population aged 65+ is associated with a **3.46% increase** in the COVID-19 death rate.
+- **Hispanic populations experience higher mortality rates.** A **1 percentage point increase** in the Hispanic population is associated with a **1.02% increase** in the COVID-19 death rate.
+- **Economic factors matter.** County-level variations in income, employment, and industry composition also impact COVID-19 death rates.
+- **State-level policies play a significant role.** The model suggests that differences in state policies contribute to variations in death rates, even after controlling for other factors.
+
+# Limitations
+- **Missing variables**: Important factors such as **vaccination rates, healthcare access, and state-specific public health policies** were not included in the analysis.
+- **Assumption of linearity**: The model assumes a linear relationship between predictors and the log-transformed death rate, which may not fully capture complex interactions.
+- **Causality is not established**: LASSO regression identifies associations but does not prove causal relationships.
+- **Spatial dependencies**: County clustering effects are not directly modeled, which may influence results.
+
+
+# Appendix 1: Data description 
+
+
+A detailed summary of the variables in each data set follows:
+
+## Infection and fatality data
+
+* date: Date
+* county: County name
+* state: State name
+* fips: County code that uniquely identifies a county
+* cases: Number of cumulative COVID-19 infections
+* deaths: Number of cumulative COVID-19 deaths
+
+## Socioeconomic demographics
+
+*Income*: Poverty level and household income 
+
+* PovertyUnder18Pct: Poverty rate for children age 0-17, 2018
+* Deep_Pov_All: Deep poverty, 2014-18
+* Deep_Pov_Children: Deep poverty for children, 2014-18
+* PovertyAllAgesPct: Poverty rate, 2018
+* MedHHInc: Median household income, 2018 (In 2018 dollars
+* PerCapitaInc: Per capita income in the past 12 months (In 2018 inflation adjusted dollars), 2014-18
+* PovertyAllAgesNum: Number of people of all ages in poverty, 2018
+* PovertyUnder18Num: Number of people age 0-17 in poverty, 2018
+
+
+*Jobs*: Employment type, rate, and change 
+
+* UnempRate2007-2019: Unemployment rate, 2007-2019
+* NumEmployed2007-2019: Employed, 2007-2019
+* NumUnemployed2007-2019: Unemployed, 2007-2019
+
+* PctEmpChange1019: Percent employment change, 2010-19
+* PctEmpChange1819: Percent employment change, 2018-19
+* PctEmpChange0719: Percent employment change, 2007-19
+* PctEmpChange0710: Percent employment change, 2007-10
+
+* NumCivEmployed: Civilian employed population 16 years and over, 2014-18
+* NumCivLaborforce2007-2019: Civilian labor force, 2007-2019
+
+
+* PctEmpFIRE: Percent of the civilian labor force 16 and over  employed in finance and insurance, and real estate and rental and leasing, 2014-18
+* PctEmpConstruction: Percent of the civilian labor force 16 and over employed in construction, 2014-18
+* PctEmpTrans: Percent of the civilian labor force 16 and over employed in transportation, warehousing and utilities, 2014-18
+* PctEmpMining: Percent of the civilian labor force 16 and over employed in mining, quarrying, oil and gas extraction, 2014-18
+* PctEmpTrade: Percent of the civilian labor force 16 and over employed in wholesale and retail trade, 2014-18
+* PctEmpInformation: Percent of the civilian labor force 16 and over employed in information services, 2014-18
+* PctEmpAgriculture: Percent of the civilian labor force 16 and over employed in agriculture, forestry, fishing, and hunting, 2014-18
+* PctEmpManufacturing: Percent of the civilian labor force 16 and over employed in manufacturing, 2014-18
+* PctEmpServices: Percent of the civilian labor force 16 and over employed in services, 2014-18
+* PctEmpGovt: Percent of the civilian labor force 16 and over employed in public administration, 2014-18
+
+*People*: Population size, density, education level, race, age, household size, and migration rates
+
+* PopDensity2010: Population density, 2010
+* LandAreaSQMiles2010: Land area in square miles, 2010
+
+* TotalHH: Total number of households, 2014-18
+* TotalOccHU: Total number of occupied housing units, 2014-18
+* AvgHHSize: Average household size, 2014-18
+* OwnHomeNum: Number of owner occupied housing units, 2014-18
+* OwnHomePct: Percent of owner occupied housing units, 2014-18
+* NonEnglishHHPct: Percent of non-English speaking households of total households, 2014-18
+* HH65PlusAlonePct: Percent of persons 65 or older living alone, 2014-18
+* FemaleHHPct: Percent of female headed family households of total households, 2014-18
+* FemaleHHNum: Number of female headed family households, 2014-18
+* NonEnglishHHNum: Number of non-English speaking households, 2014-18
+* HH65PlusAloneNum: Number of persons 65 years or older living alone, 2014-18
+
+* Age65AndOlderPct2010: Percent of population 65 or older, 2010
+* Age65AndOlderNum2010: Population 65 years or older, 2010
+* TotalPop25Plus: Total population 25 and older, 2014-18 - 5-year average
+* Under18Pct2010: Percent of population under age 18, 2010
+* Under18Num2010: Population under age 18, 2010
+
+*  Ed1LessThanHSPct: Percent of persons with no high school diploma or GED, adults 25 and over, 2014-18
+* Ed2HSDiplomaOnlyPct: Percent of persons with a high school diploma or GED only, adults 25 and over, 2014-18
+* Ed3SomeCollegePct: Percent of persons with some college experience, adults 25 and over, 2014-18
+* Ed4AssocDegreePct: Percent of persons with an associate's degree, adults 25 and over, 2014-18
+* Ed5CollegePlusPct: Percent of persons with a 4-year college degree or more, adults 25 and over, 2014-18
+* Ed1LessThanHSNum: No high school, adults 25 and over, 2014-18
+* Ed2HSDiplomaOnlyNum: High school only, adults 25 and over, 2014-18
+* Ed3SomeCollegeNum: Some college experience, adults 25 and over, 2014-18
+* Ed4AssocDegreeNum: Number of persons with an associate's degree, adults 25 and over, 2014-18
+* Ed5CollegePlusNum: College degree 4-years or more, adults 25 and over, 2014-18
+
+* ForeignBornPct: Percent of total population foreign born, 2014-18
+* ForeignBornEuropePct: Percent of persons born in Europe, 2014-18
+* ForeignBornMexPct: Percent of persons born in Mexico, 2014-18
+* ForeignBornCentralSouthAmPct: Percent of persons born in Central or South America, 2014-18
+* ForeignBornAsiaPct: Percent of persons born in Asia, 2014-18
+* ForeignBornCaribPct: Percent of persons born in the Caribbean, 2014-18
+* ForeignBornAfricaPct: Percent of persons born in Africa, 2014-18
+* ForeignBornNum: Number of people foreign born, 2014-18
+* ForeignBornCentralSouthAmNum: Number of persons born in Central or South America, 2014-18
+* ForeignBornEuropeNum: Number of persons born in Europe, 2014-18
+* ForeignBornMexNum: Number of persons born in Mexico, 2014-18
+* ForeignBornAfricaNum: Number of persons born in Africa, 2014-18
+* ForeignBornAsiaNum: Number of persons born in Asia, 2014-18
+* ForeignBornCaribNum: Number of persons born in the Caribbean, 2014-18
+
+* Net_International_Migration_Rate_2010_2019: Net international migration rate, 2010-19
+* Net_International_Migration_2010_2019: Net international migration, 2010-19
+* Net_International_Migration_2000_2010: Net international migration, 2000-10
+* Immigration_Rate_2000_2010: Net international migration rate, 2000-10
+* NetMigrationRate0010: Net migration rate, 2000-10
+* NetMigrationRate1019: Net migration rate, 2010-19
+* NetMigrationNum0010: Net migration, 2000-10
+* NetMigration1019: Net Migration, 2010-19
+
+* NaturalChangeRate1019: Natural population change rate, 2010-19
+* NaturalChangeRate0010: Natural population change rate, 2000-10
+* NaturalChangeNum0010: Natural change, 2000-10
+* NaturalChange1019: Natural population change, 2010-19
+
+* TotalPop2010: Population size 4/1/2010 Census
+* TotalPopEst2010: Population size 7/1/2010
+* TotalPopEst2011: Population size 7/1/2011
+* TotalPopEst2012: Population size 7/1/2012
+* TotalPopEst2013: Population size 7/1/2013
+* TotalPopEst2014: Population size 7/1/2014
+* TotalPopEst2015: Population size 7/1/2015
+* TotalPopEst2016: Population size 7/1/2016
+* TotalPopEst2017: Population size 7/1/2017
+* TotalPopEst2018: Population size 7/1/2018
+* TotalPopEst2019: Population size 7/1/2019
+* TotalPopACS: Total population, 2014-18 - 5-year average
+* TotalPopEstBase2010: County Population estimate base 4/1/2010
+
+* NonHispanicAsianPopChangeRate0010: Population change rate Non-Hispanic Asian, 2000-10
+* PopChangeRate1819: Population change rate, 2018-19
+* PopChangeRate1019: Population change rate, 2010-19
+* PopChangeRate0010: Population change rate, 2000-10
+* NonHispanicNativeAmericanPopChangeRate0010: Population change rate Non-Hispanic Native American, 2000-10
+* HispanicPopChangeRate0010: Population change rate Hispanic, 2000-10
+* MultipleRacePopChangeRate0010: Population change rate multiple race, 2000-10
+* NonHispanicWhitePopChangeRate0010: Population change rate Non-Hispanic White, 2000-10
+* NonHispanicBlackPopChangeRate0010: Population change rate Non-Hispanic African American, 2000-10
+
+* MultipleRacePct2010: Percent multiple race, 2010
+* WhiteNonHispanicPct2010: Percent Non-Hispanic White, 2010
+* NativeAmericanNonHispanicPct2010: Percent Non-Hispanic Native American, 2010
+* BlackNonHispanicPct2010: Percent Non-Hispanic African American, 2010
+* AsianNonHispanicPct2010: Percent Non-Hispanic Asian, 2010
+* HispanicPct2010: Percent Hispanic, 2010
+* MultipleRaceNum2010: Population size multiple race, 2010
+* WhiteNonHispanicNum2010: Population size Non-Hispanic White, 2010
+* BlackNonHispanicNum2010: Population size Non-Hispanic African American, 2010
+* NativeAmericanNonHispanicNum2010: Population size Non-Hispanic Native American, 2010
+* AsianNonHispanicNum2010: Population size Non-Hispanic Asian, 2010
+* HispanicNum2010: Population size Hispanic
+
+## County classifications
+
+Type of county (rural or urban on a rural-urban continuum scale)
+
+* Type_2015_Recreation_NO: Recreation counties, 2015 edition
+* Type_2015_Farming_NO: Farming-dependent counties, 2015 edition
+* Type_2015_Mining_NO: Mining-dependent counties, 2015 edition
+* Type_2015_Government_NO: Federal/State government-dependent counties, 2015 edition
+* Type_2015_Update: County typology economic types, 2015 edition
+* Type_2015_Manufacturing_NO: Manufacturing-dependent counties, 2015 edition
+* Type_2015_Nonspecialized_NO: Nonspecialized counties, 2015 edition
+* RecreationDependent2000: Nonmetro recreation-dependent, 1997-00
+* ManufacturingDependent2000: Manufacturing-dependent, 1998-00
+* FarmDependent2003: Farm-dependent, 1998-00
+* EconomicDependence2000: Economic dependence, 1998-00
+
+* RuralUrbanContinuumCode2003: Rural-urban continuum code, 2003
+* UrbanInfluenceCode2003: Urban influence code, 2003
+* RuralUrbanContinuumCode2013: Rural-urban continuum code, 2013
+* UrbanInfluenceCode2013: Urban influence code, 2013
+* Noncore2013: Nonmetro noncore, outside Micropolitan and Metropolitan, 2013
+* Micropolitan2013: Micropolitan, 2013
+* Nonmetro2013: Nonmetro, 2013
+* Metro2013: Metro, 2013
+* Metro_Adjacent2013: Nonmetro, adjacent to metro area, 2013
+* Noncore2003: Nonmetro noncore, outside Micropolitan and Metropolitan, 2003
+* Micropolitan2003: Micropolitan, 2003
+* Metro2003: Metro, 2003
+* Nonmetro2003: Nonmetro, 2003
+* NonmetroNotAdj2003: Nonmetro, nonadjacent to metro area, 2003
+* NonmetroAdj2003: Nonmetro, adjacent to metro area, 2003
+
+* Oil_Gas_Change: Change in the value of onshore oil and natural gas production, 2000-11
+* Gas_Change: Change in the value of onshore natural gas production, 2000-11
+* Oil_Change: Change in the value of onshore oil production, 2000-11
+
+* Hipov: High poverty counties, 2014-18
+* Perpov_1980_0711: Persistent poverty counties, 2015 edition
+* PersistentChildPoverty_1980_2011: Persistent child poverty counties, 2015 edition
+* PersistentChildPoverty2004: Persistent child poverty counties, 2004
+* PersistentPoverty2000: Persistent poverty counties, 2004
+
+* Low_Education_2015_update: Low education counties, 2015 edition
+* LowEducation2000: Low education, 2000
+
+* HiCreativeClass2000: Creative class, 2000
+* HiAmenity: High natural amenities
+* RetirementDestination2000: Retirement destination, 1990-00
+* Low_Employment_2015_update: Low employment counties, 2015 edition
+* Population_loss_2015_update: Population loss counties, 2015 edition
+* Retirement_Destination_2015_Update: Retirement destination counties, 2015 edition
+
+# Appendix 2: Data cleaning 
+
+The raw data sets are dirty and need transforming before we can do our EDA.
+It takes time and efforts to clean and merge different data sources so we provide the final output of the cleaned and merged data. The cleaning procedure is as follows. Please read through to understand what is in the cleaned data. We set `eval = data_cleaned` in the following cleaning chunks so that these cleaning chunks will only run if any of `data/covid_county.csv`, `data/covid_rates.csv` or `data/covid_intervention.csv`  does not exist.
+
+```{r}
+# Indicator to check whether the data files exist
+data_cleaned <- !(file.exists("data/covid_county.csv") & 
+                    file.exists("data/covid_rates.csv") & 
+                    file.exists("data/covid_intervention.csv"))
+```
+
+We first read in the table using `data.table::fread()`, as we did last time.
+
+```{r Read in covid data, eval = data_cleaned}
+# COVID case/mortality rate data
+covid_rates <- fread("data/us_counties.csv", na.strings = c("NA", "", "."))
+nyc <- fread("data/nycdata.csv", na.strings = c("NA", "", "."))
+
+# Socioeconomic data
+income <- fread("data/income.csv", na.strings = c("NA", "", "."))
+jobs <- fread("data/jobs.csv", na.strings = c("NA", "", "."))
+people <- fread("data/people.csv", na.strings = c("NA", "", "."))
+county_class <- fread("data/county_classifications.csv", na.strings = c("NA", "", "."))
+
+# Internvention policy data
+int_dates <- fread("data/intervention_dates.csv", na.strings = c("NA", "", "."))
+```
+
+## Clean NYC data
+
+The original NYC data contains more information than we need. We extract only the number of cases and deaths and format it the same as the `covid_rates` data.
+
+```{r Clean NYC data, eval = data_cleaned}
+# NYC county fips matching table 
+nyc_fips <- data.table(FIPS = c('36005', '36047', '36061', '36081', '36085'),
+                       County = c("BX", "BK", "MN", "QN", "SI"))
+
+# nyc case
+nyc_case <- nyc[,.(date = as.Date(date_of_interest, "%m/%d/%Y"),
+                   BX = BX_CASE_COUNT, 
+                   BK = BK_CASE_COUNT, 
+                   MN = MN_CASE_COUNT, 
+                   QN = QN_CASE_COUNT, 
+                   SI = SI_CASE_COUNT)]
+
+nyc_case %<>% 
+  pivot_longer(cols = BX:SI, 
+               names_to = "County",
+               values_to = "cases") %>%
+  arrange(date) %>%
+  group_by(County) %>%
+  mutate(cum_cases = cumsum(cases))
+
+# nyc death
+nyc_death <- nyc[,.(date = as.Date(date_of_interest, "%m/%d/%Y"),
+                   BX = BX_DEATH_COUNT, 
+                   BK = BK_DEATH_COUNT, 
+                   MN = MN_DEATH_COUNT, 
+                   QN = QN_DEATH_COUNT, 
+                   SI = SI_DEATH_COUNT)]
+
+nyc_death %<>% 
+  pivot_longer(cols = BX:SI, 
+               names_to = "County",
+               values_to = "deaths") %>%
+  arrange(date) %>%
+  group_by(County) %>%
+  mutate(cum_deaths = cumsum(deaths))
+
+nyc_rates <- merge(nyc_case, 
+                   nyc_death,
+                   by = c("date", "County"),
+                   all.x= T)
+
+nyc_rates <- merge(nyc_rates,
+                   nyc_fips,
+                   by = "County")
+
+nyc_rates$State <- "New York"
+nyc_rates %<>% 
+  select(date, FIPS, County, State, cum_cases, cum_deaths) %>%
+  arrange(FIPS, date)
+```
+  
+## Continental US cases
+
+We only consider cases and death in continental US. Alaska, Hawaii, and Puerto Rico have 02, 15, and 72 as their respective first 2 digits of their FIPS. We use the `%/%` operator for integer division to get the first 2 digits of FIPS. We also remove Virgin Islands and Northern Mariana Islands. All data of counties in NYC are aggregated as `County == "New York City"` in `covid_rates` with no FIPS, so we combine the NYC data into `covid_rate`.
+
+```{r, eval = data_cleaned}
+covid_rates <- covid_rates %>% 
+  arrange(fips, date) %>%
+  filter(!(fips %/% 1000 %in% c(2, 15, 72))) %>%
+  filter(county != "New York City") %>%
+  filter(!(state %in% c("Virgin Islands", "Northern Mariana Islands"))) %>%
+  rename(FIPS = "fips",
+         County = "county",
+         State = "state",
+         cum_cases = "cases", 
+         cum_deaths = "deaths")
+
+
+covid_rates$date <- as.Date(covid_rates$date)
+
+covid_rates <- rbind(covid_rates, 
+                     nyc_rates)
+```
+
+## COVID date to week
+
+We set the week of Jan 21, 2020 (the first case of COVID case in US) as the first week (2020-01-19 to 2020-01-25).
+
+```{r, eval = data_cleaned}
+covid_rates[, week := (interval("2020-01-19", date) %/% weeks(1)) + 1]
+```
+
+## COVID infection/mortality rates
+
+Merge the `TotalPopEst2019` variable from the demographic data with `covid_rates` by FIPS.
+  
+```{r, eval = data_cleaned}
+covid_rates <- merge(covid_rates[!is.na(FIPS)], 
+                     people[,.(FIPS = as.character(FIPS),
+                                   TotalPopEst2019)],
+                     by = "FIPS",  
+                     all.x = TRUE)
+```
+
+
+## NA in COVID data
+
+NA values in the `covid_rates` data set correspond to a county not having confirmed cases/deaths. We replace the NA values in these columns with zeros. FIPS for Kansas city, Missouri, Rhode Island and some others are missing. We drop them for the moment and output the data up to week 57 as `covid_rates.csv`.
+
+```{r, eval = data_cleaned}
+covid_rates$cum_cases[is.na(covid_rates$cum_cases)] <- 0
+covid_rates$cum_deaths[is.na(covid_rates$cum_deaths)] <- 0
+```
+
+```{r, eval = data_cleaned}
+fwrite(covid_rates %>% 
+         filter(week < 58) %>% 
+         arrange(FIPS, date), 
+       "data/covid_rates.csv")
+```
+
+## Formatting date in `int_dates`
+
+We convert the columns representing dates in `int_dates` to R Date types using `as.Date()`. 
+We will need to specify that the `origin` parameter is `"0001-01-01"`. 
+We output the data as `covid_intervention.csv`.
+
+```{r, eval = data_cleaned}
+int_dates <- int_dates[-1,]
+date_cols <- names(int_dates)[-(1:3)]
+int_dates[, (date_cols) := lapply(.SD, as.Date, origin = "0001-01-01"), 
+          .SDcols = date_cols]
+
+fwrite(int_dates, "data/covid_intervention.csv")
+```
+
+## Merge demographic data
+
+Merge the demographic data sets by FIPS and output as `covid_county.csv`.
+
+```{r, eval = data_cleaned}
+countydata <-
+  merge(x = income,
+        y = merge(
+          x = people,
+          y = jobs,
+          by = c("FIPS", "State", "County")),
+        by = c("FIPS", "State", "County"),
+        all = TRUE)
+
+
+countydata <- 
+  merge(
+    x = countydata,
+    y = county_class %>% rename(FIPS = FIPStxt), 
+    by = c("FIPS", "State", "County"),
+    all = TRUE
+  )
+
+# Check dimensions
+# They are now 3279 x 208
+dim(countydata)
+fwrite(countydata, "data/covid_county.csv")
+```
+

@@ -1,0 +1,695 @@
+---
+title: "Analyzing the Key Factors Behind Traffic Crash Severity in Chicago"
+author: 
+  - Yuting Sun
+  - Sophia Shi
+  - Ruichen Li
+date: "Spring 2025"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '4'
+    number_sections: true
+  html_document:
+    code_folding: show
+    highlight: haddock
+    number_sections: true
+    theme: lumen
+    toc: true
+    toc_depth: 4
+    toc_float: true
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, results = "hide", fig.width=8, fig.height=4)
+options(scipen = 0, digits = 3)  # controls base R output
+
+if(!require('pacman')) {install.packages('pacman')}
+pacman::p_load(tidyverse, dplyr, ggplot2, sf, mapview, ggmap, leaflet, data.table, lubridate, skimr, scales, plotly)
+pacman::p_load(randomForest, caret, xgboost, neuralnet, nnet, glmnet) # for model building
+set.seed(12356)
+
+```
+
+\pagebreak
+
+# Overview and Goal of Study  
+
+## Background  
+Traffic crashes are a persistent challenge in urban environments, leading to significant societal costs, including fatalities, injuries, and economic losses. Chicago, as one of the largest metropolitan areas in the United States, experiences thousands of traffic crashes annually, with varying levels of severity. Understanding the key factors contributing to crash severity can help improve road safety policies, optimize infrastructure planning, and reduce accident-related fatalities.
+
+
+## Goal  
+The objective of this study is to analyze traffic crash data from Chicago to identify the most critical factors influencing the severity of accidents. By leveraging machine learning techniques such as LASSO regression, Random Forest, and Multinomial Logistic Regression, we aim to develop predictive models that can assist policymakers, urban planners, and traffic safety officials in making data-driven decisions to mitigate severe accidents.
+
+## Summary of Findings  
+Our analysis revealed several key factors influencing the severity of traffic crashes in Chicago. Environmental conditions, including weather, lighting, and roadway surface conditions, play a significant role in determining the severity of injuries sustained. Crashes that occurred in rainy conditions or poor lighting environments were more likely to result in incapacitating or fatal injuries. Additionally, speed limits emerged as a critical factor, with accidents occurring on roads with higher posted speed limits being associated with more severe injuries.
+From a behavioral perspective, primary contributing factors such as failing to yield, following too closely, and exceeding authorized speed limits were found to have strong correlations with more severe crashes. Our LASSO regression model helped identify the most important predictors of crash severity, filtering out irrelevant or less significant variables. The multinomial logistic regression provided insights into how different factors, such as traffic control devices, lighting conditions, and driver behavior, influence the probability of an accident resulting in a particular level of severity. Furthermore, the Random Forest model demonstrated strong predictive capabilities, offering valuable insights into feature importance. However, it struggled with class imbalance, particularly in distinguishing between less common but critical outcomes such as fatal crashes.
+
+
+## Challenges and Limitations  
+Throughout the analysis, we encountered several challenges that required careful handling. One of the most significant issues was the presence of missing or incomplete data, which, if not addressed properly, could introduce bias into the analysis. Additionally, the dataset exhibited severe class imbalance, with fatal crashes representing only a small fraction of the total observations. This imbalance required specific techniques, such as undersampling the majority classes, to ensure that models did not simply learn to predict the most common outcomes.
+Another challenge was the geographic and contextual limitation of the dataset. Since the data is restricted to Chicago, the findings may not be generalizable to other cities with different road conditions, traffic laws, or driving behaviors. Additionally, the reliance on reported crash data means that minor accidents or unreported incidents may not be accurately represented, potentially affecting the robustness of the conclusions. Despite these challenges, the study provides valuable insights that can help inform traffic safety policies and accident prevention strategies.
+
+
+# Data Description 
+The dataset used in this study comes from the City of Chicago’s publicly available traffic crash reports, which contain detailed records of reported accidents within the city. It includes a wide range of attributes related to crash circumstances, environmental conditions, road characteristics, and the severity of injuries sustained. Key variables include the time and location of crashes, weather and lighting conditions, posted speed limits, roadway surface conditions, and contributing factors such as driver behavior or traffic control violations. Additionally, the dataset categorizes crash severity into different levels, ranging from no injury to fatal accidents, allowing for a comprehensive analysis of injury patterns and risk factors.
+
+To ensure the quality and relevance of the analysis, the dataset underwent extensive preprocessing. Instances with missing or incomplete values in critical variables, such as injury severity or location coordinates, were removed. Additionally, cases labeled as "Reported, Not Evident" were excluded to focus on crashes with confirmed injury classifications. Due to the large volume of data, we further filtered the dataset to include crashes from a specific time range, maintaining a balance between computational efficiency and data representativeness. Since the dataset is inherently imbalanced—where non-injury and minor injury cases vastly outnumber severe and fatal accidents—we applied resampling techniques to create a more balanced distribution for model training.
+
+While the dataset provides a rich source of information for analyzing crash severity, it is important to acknowledge certain limitations. The data is specific to the City of Chicago, meaning conclusions drawn from this study may not fully generalize to other regions with different traffic patterns, road infrastructures, or enforcement policies. Additionally, the dataset does not include all possible risk factors, such as driver demographics, vehicle conditions, or real-time traffic congestion, which could further refine predictive modeling. Despite these limitations, the dataset remains a valuable resource for understanding urban traffic safety and informing potential policy interventions.
+
+
+# Exploratory data analysis (EDA)
+## Data Preprocessing/Cleaning
+The raw data contains many irrelevant columns such as instance ID and street name, another important issue is that the four categories we are predicting are extremely imbalanced. There are much more no injury cases than fatal cases, which could cause significant over fitting to the majority classes. We approach by under sample the majority classes, making a more balanced data set for model building. First remove all missing values (na) in the data set. Then, filter all "no evident" data and the blank data.
+```{r cars}
+df = read.csv("Traffic_Crashes_250206.csv")
+
+```
+
+```{r}
+df_filtered = df %>% 
+  filter(MOST_SEVERE_INJURY != "REPORTED, NOT EVIDENT")
+
+df_filtered$MOST_SEVERE_INJURY <- factor(df_filtered$MOST_SEVERE_INJURY, 
+                                        levels = c("NO INDICATION OF INJURY", 
+                                                   "NONINCAPACITATING INJURY", 
+                                                   "INCAPACITATING INJURY", 
+                                                   "FATAL"), 
+                                        ordered = TRUE)
+```
+
+
+## Data Transformations and Plots
+To effectively analyze injury severity levels, we begin by ranking them from the lowest to the highest severity. The levels range from "NO INDICATION OF INJURY", which represents the least severe category, to "FATAL", indicating the most severe outcome. To visualize the spatial distribution of these incidents, we will load a map of Chicago using an API, incorporating the latitude and longitude coordinates of the specific city area under analysis. This will allow us to geographically map injury occurrences and assess patterns across different locations within the city.
+
+### Traffic Crashes by Conditions
+Graph different plausible causes by the location and severity.
+```{r}
+API_key <- "24f32467-3038-4dc5-bde1-a3a7806ec34e"
+register_stadiamaps(API_key)
+map <- get_stadiamap(c(left = -87.8, bottom = 41.7,
+                        right = -87.6, top = 42), zoom = 12,
+                     maptype = "stamen_toner_lite")
+ggmap(map)
+
+```
+
+### Lighting Conditions Impact on Crash Severity
+```{r, warning=FALSE}
+df_sampled = df_filtered[sample(1000),]
+
+
+lighting =  df_sampled%>%
+  filter(LIGHTING_CONDITION != "")
+
+lighting <- lighting %>%
+  filter(!is.na(LONGITUDE) & !is.na(LATITUDE) & LIGHTING_CONDITION != "")
+
+ggmap(map) + 
+  geom_point(data = lighting, 
+             aes(x = LONGITUDE, y = LATITUDE, color = LIGHTING_CONDITION,size = MOST_SEVERE_INJURY, alpha = 0.7))
+```
+Lighting looks very evenly spread, with all kinds of lighting conditions having different levels of injuries.
+
+### Road Conditions Impact on Crash Severity
+
+```{r, warning=FALSE}
+df_sampled = df_filtered[sample(1000),]
+
+
+bad_raodcondi =  df_sampled%>%
+  filter(ROADWAY_SURFACE_COND != "DRY")
+
+
+ggmap(map) + 
+  geom_point(data = bad_raodcondi, 
+             aes(x = LONGITUDE, y = LATITUDE, color = ROADWAY_SURFACE_COND,size = MOST_SEVERE_INJURY, alpha = 0.7))
+```
+According to the plot, mostly accident happens on dry roads. 
+
+### Weather Conditions Impact on Crash Severity
+```{r fig.align='center', warning=FALSE}
+df_sampled = df_filtered[sample(1000),]
+weather = df_sampled %>% filter(WEATHER_CONDITION != "")
+
+ggmap(map) + 
+  geom_point(data = weather, 
+             aes(x = LONGITUDE, y = LATITUDE, color = WEATHER_CONDITION, size = MOST_SEVERE_INJURY, alpha = 0.7))
+
+```
+
+```{r fig.align='center', warning=FALSE}
+df_sampled = df_filtered[sample(1000),]
+
+
+weather =  df_sampled%>%
+  filter(WEATHER_CONDITION != "")
+
+bad_weather =  weather%>%
+  filter(WEATHER_CONDITION != "CLEAR")
+
+ggmap(map) + 
+  geom_point(data = bad_weather, 
+             aes(x = LONGITUDE, y = LATITUDE, color = WEATHER_CONDITION,size = MOST_SEVERE_INJURY, alpha = 0.7))
+```
+From the graph shows above, most crashes happen on clear weather. And among all the bad weathers, rain causes the most severe injuries.
+
+### Speed Limit Influence on Crash Severity
+```{r, warning=FALSE}
+df_sampled = df_filtered[sample(3000),]
+df_sampled = df_sampled %>% filter(MOST_SEVERE_INJURY != "NO INDICATION OF INJURY")
+
+speed = df_sampled %>% filter(POSTED_SPEED_LIMIT != "")
+
+ggmap(map) + 
+  geom_point(data = speed, 
+             aes(x = LONGITUDE, y = LATITUDE, color = MOST_SEVERE_INJURY, size = POSTED_SPEED_LIMIT, alpha = 0.7))
+
+```
+According to the graph, more severe accidents are on higher speed limit roads. 
+
+### Relationship With Hit & Run
+```{r weather_plot, fig.align='center', warning=FALSE}
+df_sampled = df_filtered[sample(4000),]
+
+
+hitrun =  df_sampled%>%
+  filter(HIT_AND_RUN_I != "")
+
+ggmap(map) + 
+  geom_point(data = hitrun, 
+             aes(x = LONGITUDE, y = LATITUDE, color = HIT_AND_RUN_I,size = MOST_SEVERE_INJURY, alpha = 0.7))
+```
+
+Hit & Run happens on different severity levels, but there are no Hit & Run for fatal injury.
+
+# Model Training
+
+## Dataset Preparation
+Before training the models, we conducted a thorough preprocessing of the dataset to ensure its quality and suitability for machine learning. First, all categorical variables were converted into factor format to facilitate proper encoding. We also addressed missing values by removing incomplete records to prevent data inconsistencies from affecting model performance.
+Given the significant class imbalance in crash severity, where minor injuries and no-injury cases dominate the dataset, we applied undersampling techniques to create a more balanced distribution. This approach helped mitigate bias toward the majority classes and improved the model’s ability to distinguish severe and fatal crashes.
+After preprocessing, we partitioned the dataset into training and testing sets using an 80-20 split. This division ensured that the models could be trained on a substantial portion of the data while preserving an independent test set for evaluating performance and generalizability.
+
+```{r}
+library(dplyr)
+
+majority_classes <- c("NO INDICATION OF INJURY", "NONINCAPACITATING INJURY", "INCAPACITATING INJURY")
+df_majority <- df_filtered %>% filter(MOST_SEVERE_INJURY %in% majority_classes)
+df_minority <- df_filtered %>% filter(!MOST_SEVERE_INJURY %in% majority_classes)
+
+target_size <- 2000  
+set.seed(123)
+
+df_majority_undersampled <- df_majority %>%
+  group_by(MOST_SEVERE_INJURY) %>%
+  sample_n(size = target_size, replace = FALSE) %>%
+  ungroup()
+
+df_undersampled <- bind_rows(df_minority, df_majority_undersampled)
+table(df_undersampled$MOST_SEVERE_INJURY)
+
+```
+
+## LASSO Regression for Feature Selection
+We first fitted a LASSO regression model to automatically select the most important features for classification. We chose all the possible features, excluding irrelevant features such as ID, and constructed the model. The results for each level of severity are shown in the output. 
+```{r fig.align='center', echo=FALSE}
+df_recent = read.csv("Traffic_Crashes_250206.csv")
+library(dplyr)
+
+# Removes rows where MOST_SEVERE_INJURY is exactly ""
+df <- df_recent[df_recent$MOST_SEVERE_INJURY != "", ]
+df <- df[df$MOST_SEVERE_INJURY != "REPORTED, NOT EVIDENT", ]
+table(df$MOST_SEVERE_INJURY)
+
+# 1. Define your majority classes
+majority_classes <- c(
+  "NO INDICATION OF INJURY",
+  "NONINCAPACITATING INJURY",
+  "INCAPACITATING INJURY"
+)
+
+# 2. Split the data into 'majority' and 'minority' subsets
+df_majority <- df %>% 
+  filter(MOST_SEVERE_INJURY %in% majority_classes)
+
+df_minority <- df %>% 
+  filter(!MOST_SEVERE_INJURY %in% majority_classes)
+  # i.e., "FATAL" + "INCAPACITATING INJURY"
+
+# 3. Undersample each majority class to a chosen size
+#    Adjust 'target_size' to suit your needs.
+target_size <- 2000
+
+set.seed(123)  # for reproducibility
+df_majority_undersampled <- df_majority %>%
+  group_by(MOST_SEVERE_INJURY) %>%
+  sample_n(size = target_size, replace = FALSE) %>%
+  ungroup()
+
+# 4. Combine the minority subset (kept intact) with the undersampled majority
+df_undersampled <- bind_rows(df_minority, df_majority_undersampled)
+
+# 5. Check new distribution
+table(df_undersampled$MOST_SEVERE_INJURY)
+
+library(glmnet)
+
+df_undersampled <- df_undersampled %>% drop_na()  # Remove rows with NA values
+
+# Build the design matrix (X) and outcome (y)
+X <- model.matrix(MOST_SEVERE_INJURY ~ POSTED_SPEED_LIMIT +TRAFFIC_CONTROL_DEVICE+DEVICE_CONDITION+WEATHER_CONDITION+LIGHTING_CONDITION+FIRST_CRASH_TYPE+TRAFFICWAY_TYPE+ALIGNMENT+ROADWAY_SURFACE_COND+INTERSECTION_RELATED_I+NOT_RIGHT_OF_WAY_I+HIT_AND_RUN_I+PRIM_CONTRIBUTORY_CAUSE+CRASH_HOUR+CRASH_MONTH+LATITUDE+LONGITUDE, data = df_undersampled)[, -1]
+y <- df_undersampled$MOST_SEVERE_INJURY
+
+# Perform cross-validation for multinomial logistic LASSO
+cvfit <- cv.glmnet(
+  x = X,
+  y = y,
+  family = "multinomial",       # for multi-class
+  type.multinomial = "grouped", # treats coefficients of each class as a group
+  alpha = 1,                    # alpha=1 => LASSO penalty
+  nfolds = 5                    # 5-fold cross-validation (adjust as needed)
+)
+
+# Plot cross-validation curves
+plot(cvfit)
+
+# Identify best lambda
+best_lambda <- cvfit$lambda.1se
+best_lambda
+
+classnames <- cvfit$glmnet.fit$classnames
+y <- factor(y, levels = classnames)  # Ensure correct class alignment
+
+# Refit the final model at best lambda
+final_model <- glmnet(
+  x = X,
+  y = y,
+  family = "multinomial",
+  alpha = 1,
+  lambda = best_lambda
+)
+```
+
+```{r}
+# Extract coefficients at best lambda
+coef_matrix <- coef(final_model, s = best_lambda)
+
+# Convert to a readable format
+coef_list <- lapply(coef_matrix, function(m) as.matrix(m))
+
+# Function to extract only non-zero coefficients
+extract_nonzero_coefs <- function(coef_matrix) {
+  non_zero_coefs <- coef_matrix[coef_matrix != 0, , drop = FALSE]  # Keep only non-zero coefficients
+  return(rownames(non_zero_coefs))  # Return feature names
+}
+
+# Get non-zero features for each injury class
+important_features <- lapply(coef_list, extract_nonzero_coefs)
+
+# Print only the selected features (without zero coefficients)
+important_features
+
+```
+### Selected Features by Injury Severity
+The table below presents the most important features selected using **LASSO (Least Absolute Shrinkage and Selection Operator) regression**.  
+
+### Fatal Injury  
+| Feature |  
+|--------------------------|  
+| TRAFFIC_CONTROL_DEVICE SCHOOL ZONE |  
+| LIGHTING_CONDITION DARKNESS, LIGHTED ROAD |  
+| LIGHTING_CONDITION DAYLIGHT |  
+| FIRST_CRASH_TYPE FIXED OBJECT |  
+| FIRST_CRASH_TYPE PEDESTRIAN |  
+| FIRST_CRASH_TYPE REAR END |  
+| PRIM_CONTRIBUTORY_CAUSE EXCEEDING AUTHORIZED SPEED LIMIT |  
+| PRIM_CONTRIBUTORY_CAUSE PHYSICAL CONDITION OF DRIVER |  
+| LATITUDE |  
+
+### Incapacitating Injury  
+| Feature |  
+|--------------------------|  
+| DEVICE_CONDITION OTHER |  
+| LIGHTING_CONDITION DAYLIGHT |  
+| TRAFFICWAY_TYPE DIVIDED - W/MEDIAN BARRIER |  
+| TRAFFICWAY_TYPE RAMP |  
+| INTERSECTION_RELATED_I Y |  
+
+### No Indication of Injury  
+| Feature |  
+|--------------------------|  
+| POSTED_SPEED_LIMIT |  
+| LIGHTING_CONDITION DARKNESS, LIGHTED ROAD |  
+| LIGHTING_CONDITION UNKNOWN |  
+| FIRST_CRASH_TYPE FIXED OBJECT |  
+| FIRST_CRASH_TYPE HEAD ON |  
+| FIRST_CRASH_TYPE PARKED MOTOR VEHICLE |  
+| FIRST_CRASH_TYPE PEDALCYCLIST |  
+| FIRST_CRASH_TYPE PEDESTRIAN |  
+| FIRST_CRASH_TYPE SIDESWIPE SAME DIRECTION |  
+| TRAFFICWAY_TYPE DIVIDED - W/MEDIAN BARRIER |  
+| TRAFFICWAY_TYPE ONE-WAY |  
+| TRAFFICWAY_TYPE PARKING LOT |  
+| INTERSECTION_RELATED_I Y |  
+| HIT_AND_RUN_I Y |  
+| PRIM_CONTRIBUTORY_CAUSE DISREGARDING TRAFFIC SIGNALS |  
+| PRIM_CONTRIBUTORY_CAUSE EXCEEDING AUTHORIZED SPEED LIMIT |  
+| PRIM_CONTRIBUTORY_CAUSE FOLLOWING TOO CLOSELY |  
+| PRIM_CONTRIBUTORY_CAUSE IMPROPER BACKING |  
+| PRIM_CONTRIBUTORY_CAUSE IMPROPER OVERTAKING/PASSING |  
+| PRIM_CONTRIBUTORY_CAUSE PHYSICAL CONDITION OF DRIVER |  
+| PRIM_CONTRIBUTORY_CAUSE TURNING RIGHT ON RED |  
+| PRIM_CONTRIBUTORY_CAUSE UNDER THE INFLUENCE OF ALCOHOL/DRUGS (USE WHEN ARREST IS EFFECTED) |  
+| LATITUDE |
+
+
+## Multinomial Logistic Regression
+Next, we built a logistic regression model using the multinom function, incorporating the key features identified through the LASSO regression model. The model achieved an accuracy of 43.5%. While this accuracy may seem relatively low, it is reasonable given the complexity of multi-class classification. More importantly, the model highlights the most significant factors contributing to severe injuries, which could provide valuable insights for first responders, enabling them to make more informed decisions during urgent incidents.
+\pagebreak
+
+### Key Metrics
+| Metric                  | Value         |
+|-------------------------|---------------|
+| Accuracy                | 0.435         |
+| 95% Confidence Interval | (0.374, 0.498)|
+| No Information Rate     | 0.313         |
+| P-Value [Acc > NIR]     | 2.17e-05      |
+| Kappa                   | 0.206         |
+| McNemar's Test P-Value  | 0.000641      |
+
+```{r, warning=FALSE}
+# Corrected feature names based on dataset
+selected_features <- c(
+  "POSTED_SPEED_LIMIT", 
+  "LIGHTING_CONDITION", 
+  "PRIM_CONTRIBUTORY_CAUSE", 
+  "DEVICE_CONDITION", 
+  "TRAFFICWAY_TYPE", 
+  "INTERSECTION_RELATED_I"
+)
+
+# Select only these features from df_undersampled
+df_final <- df_undersampled %>%
+  select(all_of(selected_features), MOST_SEVERE_INJURY) %>%
+  drop_na()  # Remove any missing values
+```
+
+
+```{r, warning=FALSE}
+library(nnet)
+library(caret)
+
+# Ensure MOST_SEVERE_INJURY is a factor
+df_final$MOST_SEVERE_INJURY <- as.factor(df_final$MOST_SEVERE_INJURY)
+
+# Split into train and test sets
+set.seed(42)
+train_index <- createDataPartition(df_final$MOST_SEVERE_INJURY, p = 0.8, list = FALSE)
+train_data <- df_final[train_index, ]
+test_data <- df_final[-train_index, ]
+
+# Train multinomial logistic regression model
+logistic_model <- multinom(MOST_SEVERE_INJURY ~ ., data = train_data)
+
+# Summary of model
+summary(logistic_model)
+
+# Ensure categorical variables in test_data use the same levels as in train_data
+for (col in colnames(train_data)) {
+  if (is.factor(train_data[[col]])) {
+    test_data[[col]] <- factor(test_data[[col]], levels = levels(train_data[[col]]))
+  }
+}
+
+# Make predictions
+predictions <- predict(logistic_model, newdata = test_data)
+
+
+# Confusion matrix
+conf_matrix <- confusionMatrix(predictions, test_data$MOST_SEVERE_INJURY)
+print(conf_matrix)
+
+# Accuracy
+accuracy <- mean(predictions == test_data$MOST_SEVERE_INJURY)
+print(paste("Accuracy:", round(accuracy * 100, 2), "%"))
+
+
+
+```
+
+## Random Forest Model
+To further analyze the severity of traffic crashes, we employed a Random Forest classification model. This ensemble learning method is particularly effective in handling complex, non-linear relationships within the dataset. The model was trained using key variables selected through feature engineering and undersampling techniques, with 500 trees and an optimized number of predictors per split (mtry).
+The performance of the Random Forest model was evaluated using an 80-20 train-test split. On the training set, the model demonstrated strong classification performance, but the test set results indicated potential overfitting. While the model effectively classified some injury severity categories, it struggled with distinguishing specific severity levels, highlighting challenges in imbalanced class distributions.
+One of the key advantages of the Random Forest model is its ability to quantify feature importance. The variable importance plot shows that First Crash Type is the most influential factor in determining crash severity, followed by Hit and Run Indicator, Intersection Related Indicator, and Traffic Control Device. Additionally, location-based factors such as Latitude and Longitude, as well as Crash Hour and Contributory Cause, play significant roles in predicting injury severity. Speed limits, lighting, and road surface conditions also contribute but are less dominant than other features.
+The feature importance analysis provides valuable insights into the key determinants of crash severity, reinforcing that the nature of the collision and environmental conditions are critical predictors. However, while the model performs well in feature ranking, the classification results suggest that additional balancing techniques or alternative modeling approaches may be needed to improve predictive accuracy, particularly for the rare but severe fatal crashes.
+```{r}
+df_recent = read.csv("Traffic_Crashes_250206.csv")
+
+```
+```{r}
+# Removes rows where MOST_SEVERE_INJURY is exactly ""
+df <- df_recent[df_recent$MOST_SEVERE_INJURY != "", ]
+df <- df[df$MOST_SEVERE_INJURY != "REPORTED, NOT EVIDENT", ]
+table(df$MOST_SEVERE_INJURY)
+```
+```{r}
+library(dplyr)
+
+# 1. Define your majority classes
+majority_classes <- c(
+  "NO INDICATION OF INJURY",
+  "NONINCAPACITATING INJURY",
+  "INCAPACITATING INJURY"
+)
+
+# 2. Split the data into 'majority' and 'minority' subsets
+df_majority <- df %>% 
+  filter(MOST_SEVERE_INJURY %in% majority_classes)
+
+df_minority <- df %>% 
+  filter(!MOST_SEVERE_INJURY %in% majority_classes)
+  # i.e., "FATAL" + "INCAPACITATING INJURY"
+
+# 3. Undersample each majority class to a chosen size
+#    Adjust 'target_size' to suit your needs.
+target_size <- 2000
+
+set.seed(123)  # for reproducibility
+df_majority_undersampled <- df_majority %>%
+  group_by(MOST_SEVERE_INJURY) %>%
+  sample_n(size = target_size, replace = FALSE) %>%
+  ungroup()
+
+# 4. Combine the minority subset (kept intact) with the undersampled majority
+df_undersampled <- bind_rows(df_minority, df_majority_undersampled)
+
+# 5. Check new distribution
+table(df_undersampled$MOST_SEVERE_INJURY)
+```
+```{r}
+library(glmnet)
+
+df_undersampled$MOST_SEVERE_INJURY <- as.factor(df_undersampled$MOST_SEVERE_INJURY)
+
+colSums(is.na(df_undersampled))
+df_undersampled <- as.data.frame(df_undersampled)
+
+
+df_undersampled <- df_undersampled %>% na.omit()
+# Convert categorical variables into factors
+df_undersampled$MOST_SEVERE_INJURY <- as.factor(df_undersampled$MOST_SEVERE_INJURY)
+
+# Create X matrix AFTER removing NAs
+X <- model.matrix(MOST_SEVERE_INJURY~POSTED_SPEED_LIMIT +TRAFFIC_CONTROL_DEVICE+DEVICE_CONDITION+WEATHER_CONDITION+LIGHTING_CONDITION+FIRST_CRASH_TYPE+TRAFFICWAY_TYPE+ALIGNMENT+ROADWAY_SURFACE_COND+INTERSECTION_RELATED_I+NOT_RIGHT_OF_WAY_I+HIT_AND_RUN_I+PRIM_CONTRIBUTORY_CAUSE+CRASH_HOUR+CRASH_MONTH+LATITUDE+LONGITUDE, data = df_undersampled)[, -1]
+
+# Ensure y matches X in row count
+y <- df_undersampled$MOST_SEVERE_INJURY
+
+# Check if X and y have the same number of rows
+nrow(X) == length(y)  # Should return TRUE
+```
+
+```{r}
+# Perform cross-validation for multinomial logistic LASSO
+cvfit <- cv.glmnet(
+  x = X,
+  y = y,
+  family = "multinomial",       # for multi-class
+  type.multinomial = "grouped", # treats coefficients of each class as a group
+  alpha = 1,                    # alpha=1 => LASSO penalty
+  nfolds = 5                    # 5-fold cross-validation (adjust as needed)
+)
+
+# Plot cross-validation curves
+#plot(cvfit)
+
+# Identify best lambda
+best_lambda <- cvfit$lambda.min
+best_lambda
+
+# Convert y to a Proper Factor Before Training
+y <- as.factor(y)
+classnames <- levels(y)
+
+# Refit the final model at best lambda
+final_model <- glmnet(
+  x = X,
+  y = y,
+  family = "multinomial",
+  alpha = 1,
+  lambda = cvfit$lambda.1se
+)
+```
+
+```{r}
+coef.1se <- coef(final_model, s = "lambda.1se")  # Get coefficients at lambda.1se
+
+# Step 6: Retrieve the names of the selected variables
+var.1se <- rownames(as.matrix(coef.1se))[-1]  # Extract variable names, excluding intercept
+var.1se
+```
+
+```{r}
+library(randomForest)
+library(caret)
+
+set.seed(123)  # for reproducibility
+train_index <- createDataPartition(df_undersampled$MOST_SEVERE_INJURY, p = 0.8, list = FALSE)
+
+df_train <- df_undersampled[train_index, ]
+df_test  <- df_undersampled[-train_index, ]
+
+table(df_train$MOST_SEVERE_INJURY)
+table(df_test$MOST_SEVERE_INJURY)
+```
+
+```{r}
+# run the model
+set.seed(123)
+rf_model <- randomForest(
+  MOST_SEVERE_INJURY ~ POSTED_SPEED_LIMIT +TRAFFIC_CONTROL_DEVICE+DEVICE_CONDITION+WEATHER_CONDITION+LIGHTING_CONDITION+FIRST_CRASH_TYPE+TRAFFICWAY_TYPE+ALIGNMENT+ROADWAY_SURFACE_COND+INTERSECTION_RELATED_I+NOT_RIGHT_OF_WAY_I+HIT_AND_RUN_I+PRIM_CONTRIBUTORY_CAUSE+CRASH_HOUR+CRASH_MONTH+LATITUDE+LONGITUDE,   # target ~ all other columns
+  data = df_train,
+  ntree = 100,              # number of trees
+  mtry = 15,              # if NULL, sqrt(#predictors) for classification
+  importance = TRUE         # track variable importance
+)
+
+# Print summary of the model
+print(rf_model)
+
+# Plot error vs. number of trees
+plot(rf_model)
+```
+
+```{r}
+# 1. Predict classes
+test_preds <- predict(rf_model, newdata = df_test)
+
+# Confusion Matrix with test stats
+confusionMatrix(
+  data = test_preds,
+  reference = df_test$MOST_SEVERE_INJURY
+)
+```
+
+```{r}
+# Suppose your model is called rf_model
+importance_matrix <- importance(rf_model)
+
+# Convert to a data frame for plotting
+library(dplyr)
+# Convert to a data frame for plotting
+imp_df <- data.frame(
+  Variable = rownames(importance_matrix),
+  MeanDecreaseAccuracy = importance_matrix[, "MeanDecreaseAccuracy"]
+)
+
+# Sort descending by MeanDecreaseAccuracy and keep top 20
+imp_df_top20 <- imp_df %>%
+  arrange(desc(MeanDecreaseAccuracy)) %>%
+  head(20)
+
+# Plot the variable importance
+library(ggplot2)
+
+ggplot(imp_df_top20, 
+       aes(x = reorder(Variable, MeanDecreaseAccuracy), 
+           y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(
+    x = "Variable",
+    y = "Mean Decrease Accuracy",
+    title = "Top 20 Variables by Random Forest Importance"
+  ) +
+  theme_minimal()
+```
+
+The feature importance analysis provides valuable insights into the key determinants of crash severity, reinforcing that the nature of the collision and environmental conditions are critical predictors. However, while the model performs well in feature ranking, the classification results suggest that additional balancing techniques or alternative modeling approaches may be needed to improve predictive accuracy, particularly for the rare but severe fatal crashes.
+
+# Conclusion
+Through extensive data exploration and predictive modeling, we found that environmental conditions, speed limits, and driver behaviors significantly contribute to crash severity. Poor weather conditions, inadequate lighting, and wet or icy roads were associated with higher injury severity, emphasizing the importance of maintaining safe driving practices under adverse conditions. Additionally, roads with higher posted speed limits tended to experience more severe crashes, highlighting the role of speed regulation in accident prevention.
+From a behavioral perspective, contributing factors such as failing to yield, following too closely, and speeding were strongly linked to severe injuries, suggesting that stricter enforcement and public awareness campaigns could help mitigate dangerous driving behaviors. Our LASSO regression model effectively identified the most influential variables, while the multinomial logistic regression provided deeper insights into how specific crash characteristics impact injury severity. The Random Forest model demonstrated strong predictive performance, reinforcing the significance of key features but also struggling with the imbalance in fatal crash data.
+Despite the challenges posed by missing data and class imbalance, our findings provide valuable insights for policymakers and traffic safety professionals. While the study focuses on Chicago, similar methodologies can be applied to other cities to gain insights into local traffic safety dynamics. Future research could incorporate additional factors such as real-time traffic conditions, driver demographics, or vehicle types to refine predictive accuracy and expand the scope of analysis.
+
+
+# Appendix {-}
+
+## Data Dictionary
+
+### Traffic Crashes Data Dictionary  
+| Column Name                                 | Description |  
+|---------------------------------------------|------------------------------------------------------------------------|  
+| CRASH_RECORD_ID                             | Unique ID linking to crashes in Vehicles and People datasets. |  
+| CRASH_DATE_EST_I                            | Estimated crash date by desk officer or reporting party. |  
+| CRASH_DATE                                  | Date and time of crash as entered by the reporting officer. |  
+| POSTED_SPEED_LIMIT                          | Posted speed limit, as determined by the reporting officer. |  
+| TRAFFIC_CONTROL_DEVICE                      | Traffic control device present at crash location. |  
+| DEVICE_CONDITION                            | Condition of traffic control device at crash scene. |  
+| WEATHER_CONDITION                           | Weather condition at the time of the crash, determined by the reporting officer. |  
+| LIGHTING_CONDITION                          | Light condition at crash time, determined by the reporting officer. |  
+| FIRST_CRASH_TYPE                            | Type of first collision in the crash. |  
+| TRAFFICWAY_TYPE                             | Trafficway type, determined by the reporting officer. |  
+| LANE_CNT                                    | Total number of lanes in either direction, excluding turn lanes. |  
+| ALIGNMENT                                   | Street alignment at the crash location. |  
+| ROADWAY_SURFACE_COND                        | Road surface condition at the time of the crash. |  
+| ROAD_DEFECT                                 | Road defects noted at the crash location. |  
+| REPORT_TYPE                                 | Administrative report type (scene, desk, amended). |  
+| CRASH_TYPE                                  | General severity classification of the crash. |  
+| INTERSECTION_RELATED_I                      | Indicates if an intersection played a role in the crash. |  
+| NOT_RIGHT_OF_WAY_I                          | Indicates if the crash occurred outside the public right-of-way. |  
+| HIT_AND_RUN_I                               | Indicates if the crash involved a hit-and-run. |  
+| DAMAGE                                      | Estimated damage observed at the crash site. |  
+| DATE_POLICE_NOTIFIED                        | Date police were notified of the crash. |  
+| PRIM_CONTRIBUTORY_CAUSE                     | Most significant factor in causing the crash. |  
+| SEC_CONTRIBUTORY_CAUSE                      | Second most significant factor in crash causation. |  
+| STREET_NO                                   | Street number where the crash occurred. |  
+| STREET_DIRECTION                            | Street direction (N, S, E, W) of crash location. |  
+| STREET_NAME                                 | Street name of the crash location. |  
+| BEAT_OF_OCCURRENCE                          | Chicago Police Department Beat ID where the crash occurred. |  
+| PHOTOS_TAKEN_I                              | Indicates if photos were taken at the crash site. |  
+| STATEMENTS_TAKEN_I                          | Indicates if statements were taken from crash-involved units. |  
+| DOORING_I                                   | Indicates if a crash involved a motorist opening a car door into a cyclist. |  
+| WORK_ZONE_I                                 | Indicates if the crash occurred in an active work zone. |  
+| WORK_ZONE_TYPE                              | Specifies the type of work zone (if applicable). |  
+| WORKERS_PRESENT_I                           | Indicates if construction workers were present at the crash site. |  
+| NUM_UNITS                                   | Number of units (vehicles, pedestrians, bicycles) involved in the crash. |  
+| MOST_SEVERE_INJURY                          | Most severe injury sustained in the crash. |  
+| INJURIES_TOTAL                              | Total number of injuries in the crash. |  
+| INJURIES_FATAL                              | Total number of fatal injuries. |  
+| INJURIES_INCAPACITATING                     | Total number of incapacitating injuries. |  
+| INJURIES_NON_INCAPACITATING                 | Total number of non-incapacitating injuries. |  
+| INJURIES_REPORTED_NOT_EVIDENT               | Total number of reported but not evident injuries. |  
+| INJURIES_NO_INDICATION                      | Total number of crashes with no injuries reported. |  
+| INJURIES_UNKNOWN                            | Total number of unknown injuries. |  
+| CRASH_HOUR                                  | Hour of the day the crash occurred. |  
+| CRASH_DAY_OF_WEEK                           | Day of the week the crash occurred. |  
+| CRASH_MONTH                                 | Month of the year the crash occurred. |  
+| LATITUDE                                    | Latitude of the crash location. |  
+| LONGITUDE                                   | Longitude of the crash location. |  
+| LOCATION                                    | Location derived from the reported crash address. | 
+
+
